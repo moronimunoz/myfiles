@@ -3,11 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Galaxia ASCII</title>
+<title>Universo ASCII</title>
 <style>
   :root { color-scheme: dark; box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #02030a; overflow: hidden; }
-  canvas { display: block; width: 100%; height: 100%; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { background: transparent; }
+  #escenario { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+  #escenario canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #glow { filter: blur(9px); mix-blend-mode: screen; opacity: .85; }
+  #velo { position: absolute; inset: 0; background: rgba(0,0,0,.25); }
   #panel { position: fixed; top: 0; right: 0; bottom: 0; width: 244px; max-width: 80vw; box-sizing: border-box;
     padding: calc(12px + env(safe-area-inset-top, 0px)) calc(14px + env(safe-area-inset-right, 0px)) 16px 14px;
     overflow-y: auto; background: rgba(10,12,28,.86); backdrop-filter: blur(6px); border-left: 1px solid #2a2f4a;
@@ -19,6 +23,7 @@
   #abrir { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; padding: 6px 10px; background: rgba(10,12,28,.86); z-index: 4; }
   #panel .cab { display: flex; justify-content: space-between; align-items: center; font-weight: 500; font-size: 14px; }
   #panel .cab button { width: 28px; height: 28px; padding: 0; font-size: 16px; }
+  #panel select { width: 100%; height: 32px; margin-top: 10px; padding: 0 8px; font: inherit; color: #e8ebff; background: #161a33; border: 1px solid #3a4060; border-radius: 6px; cursor: pointer; }
   #panel details { border-top: 1px solid #1f2440; margin-top: 10px; padding-top: 8px; }
   #panel summary { cursor: pointer; font-weight: 500; color: #8d93b5; margin-bottom: 6px; }
   #panel .fila { margin: 0 0 7px; }
@@ -28,7 +33,7 @@
   #panel .seg { display: flex; gap: 6px; margin: 2px 0 4px; }
   #panel .seg button { flex: 1; height: 28px; }
   #panel .seg button.on { background: #22284a; border-color: #4a5280; color: #fff; }
-  #panel .sw { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 8px; text-align: center; font-size: 10.5px; color: #8d93b5; }
+  #panel .sw { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 4px; margin-bottom: 8px; text-align: center; font-size: 10.5px; color: #8d93b5; }
   #panel .sw input { width: 100%; height: 24px; padding: 0; border: 1px solid #3a4060; border-radius: 6px; background: none; cursor: pointer; }
   #panel .acc { display: flex; gap: 6px; margin-top: 14px; }
   #panel .acc button { flex: 1; height: 30px; }
@@ -37,70 +42,26 @@
 </style>
 </head>
 <body>
-<canvas id="g" aria-label="Galaxia espiral hecha con caracteres ASCII"></canvas>
-<aside id="panel" aria-label="Controles de la galaxia"></aside>
+<div id="escenario" aria-hidden="true">
+  <canvas id="g"></canvas>
+  <canvas id="glow"></canvas>
+  <div id="velo"></div>
+</div>
+<aside id="panel" aria-label="Controles"></aside>
 <button id="abrir" aria-label="Mostrar controles" hidden>Controles</button>
 <script id="motor">
 (() => {
-  // ---------- AJUSTES ----------
-  // Estos valores son los iniciales. Los controles del panel de la derecha los cambian en vivo.
   const FPS = 30;
   const RAMP = " .,:;-=+*#%@";
-  const DEF = {
-    SPIN: 0.35,                       // velocidad de giro (rad/s), rígido
-    SENTIDO: 1,                       // 1 = antihorario, -1 = horario
-    ZOOM: 1.7,                        // tamaño de la galaxia (mayor = más grande)
-    TILT_DEG: -22,                    // inclinación de la galaxia en pantalla (grados)
-    FLAT: 0.42,                       // 1 = de frente, menor = más de canto
-    BRILLO: 1,                        // 1 = normal, mayor = colores más intensos
-    // Degradado de la galaxia, del centro al borde: núcleo, naranja, brazos, borde
-    COLORES: ["#fff0be", "#ff7d19", "#ff2878", "#d71e96"],
-    NEBULOSA: 0.9,                    // manchas tenues de color en el fondo (0 = apagadas)
-    STAR_DENSITY: 0.03,               // estrellas sueltas del fondo
-    PUNTOS_DENSIDAD: 0.010,           // puntos de colores (pocos)
-    FUGAZ_MIN: 3,                     // espera mínima entre estrellas fugaces (s)
-    FUGAZ_MAX: 12,                    // espera máxima (s)
-    FUGAZ_DOBLE: 0.25,                // probabilidad de que salga una segunda enseguida
-    FUGAZ_VEL: 1.9,                   // velocidad
-    FUGAZ_COLA: 0.11,                 // largo de la línea
-    FUGAZ_GROSOR: 1.1,                // grosor de la línea (px)
-    FUGAZ_COLOR: "#d6ebff",
-  };
-  const CFG = JSON.parse(JSON.stringify(DEF));
-
-  // otros ajustes fijos
-  const FUGAZ_PRIMERA = 4;            // cuándo sale la primera (s)
-  const FUGAZ_INVERSA = 0.15;         // probabilidad de que vaya de derecha a izquierda
-  const FUGAZ_VARIACION = 8;          // grados al azar que se desvía del ángulo base
-  const FUGAZ_DIST = 0.4;             // qué tan lejos del centro puede pasar (arriba o abajo, al azar)
-  const FONDO = "#02030a";            // color del espacio
-  const ESTRELLAS = "#fff0e1";        // color de las estrellas de fondo
-  const NEBULOSA_COLORES = ["#6e3cab", "#ab5a50"];   // violeta -> marrón rojizo
-  const PUNTOS_COLORES = ["#7fb2ff", "#a5ccff", "#ffb066", "#ff8fb0", "#ffe27a", "#b68cff"];
-  // distancia al centro donde está cada color del degradado (0 = centro, 0.45 = borde)
-  const COLOR_POS = [0.07, 0.17, 0.30, 0.45];
-  // -------------------------------------------
-
-  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
-  const STAR_RGB = hex(ESTRELLAS);
-  const PUNTOS_RGB = PUNTOS_COLORES.map(hex);
-  const NEB_RGB = NEBULOSA_COLORES.map(hex);
-  let PAL, FUGAZ_RGB;
-  function actualizarColores() {       // se llama al cambiar un color en el panel
-    PAL = CFG.COLORES.map((h, i) => [COLOR_POS[i], hex(h)]);
-    FUGAZ_RGB = hex(CFG.FUGAZ_COLOR);
-  }
-  actualizarColores();
-
+  const TAU = Math.PI * 2;
   const smooth = x => { x = x < 0 ? 0 : x > 1 ? 1 : x; return x * x * (3 - 2 * x); };
   const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
   const mix = (a, b, k) => a + (b - a) * k;
+  const mod = (a, n) => ((a % n) + n) % n;
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const redondo = v => Math.round(v * 100) / 100;
 
-  const cv = document.getElementById("g"), ctx = cv.getContext("2d");
-  document.documentElement.style.background = document.body.style.background = FONDO;
-  let W, H, dpr, CW, CH, cols, rows, rnd, rnd2;
-
-  function seeded(seed) {
+  function seeded(seed) {            // aleatorio fijo, para que las estrellas no cambien al redimensionar
     return () => {
       seed |= 0; seed = seed + 0x6D2B79F5 | 0;
       let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
@@ -109,252 +70,723 @@
     };
   }
 
-  function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = innerWidth; H = innerHeight;
-    CW = W < 700 ? 9 : 7; CH = Math.round(CW * 11 / 7);
-    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
-    const R = seeded(11);
-    rnd = new Float32Array(cols * rows);
-    for (let i = 0; i < rnd.length; i++) rnd[i] = R();
-    const R2 = seeded(23);
-    rnd2 = new Float32Array(cols * rows);
-    for (let i = 0; i < rnd2.length; i++) rnd2[i] = R2();
-    ctx.font = `${Math.round(CW * 12 / 7)}px Consolas, Menlo, "DejaVu Sans Mono", monospace`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  }
+  // <ESCENARIO>
+  const cv = document.getElementById("g"), ctx = cv.getContext("2d");
+  const gl = document.getElementById("glow"), gctx = gl.getContext("2d");
+  const velo = document.getElementById("velo");
+  // </ESCENARIO>
 
-  // color según distancia al centro, interpolando entre los 4 colores del degradado
-  function tone(rho, heat) {
-    let c = PAL[PAL.length - 1][1];
-    if (rho <= PAL[0][0]) c = PAL[0][1];
-    else for (let k = 1; k < PAL.length; k++) {
-      if (rho < PAL[k][0]) {
-        const [r0, c0] = PAL[k - 1], [r1, c1] = PAL[k], f = (rho - r0) / (r1 - r0);
-        c = [mix(c0[0], c1[0], f), mix(c0[1], c1[1], f), mix(c0[2], c1[2], f)];
-        break;
-      }
+  const still = matchMedia("(prefers-reduced-motion: reduce)");
+  let W, H, dpr, CW, CH, cols, rows;
+  let desv = 0;                         // corrimiento hacia la izquierda cuando el panel está abierto
+  const UNIVERSOS = {};
+  const INICIAL = "milky";
+  let U = null, clave = INICIAL, t = 0, alActivar = () => {};
+
+  // <FUGACES>
+  // estrellas fugaces al azar (líneas finas). Las usan Milky Way y Galaxy Webb.
+  const FILAS_FUGACES = [
+    ["FUGAZ_MIN", "Espera mínima", 1, 20, 1, 1, " s"],
+    ["FUGAZ_MAX", "Espera máxima", 2, 30, 1, 1, " s"],
+    ["FUGAZ_DOBLE", "Probabilidad de doble", 0, 1, 0.05, 100, "%"],
+    ["FUGAZ_VEL", "Velocidad", 0.5, 4, 0.1, 1, ""],
+    ["FUGAZ_COLA", "Largo", 0.05, 0.4, 0.01, 1, ""],
+    ["FUGAZ_GROSOR", "Grosor", 0.5, 3, 0.1, 1, " px"],
+  ];
+
+  function crearFugaces(getCfg, getAngulo) {
+    const FUGAZ_PRIMERA = 4;            // cuándo sale la primera (s)
+    const FUGAZ_INVERSA = 0.15;         // probabilidad de que vaya de derecha a izquierda
+    const FUGAZ_VARIACION = 8;          // grados al azar que se desvía del ángulo base
+    const FUGAZ_DIST = 0.4;             // qué tan lejos del centro puede pasar (arriba o abajo, al azar)
+    const lista = [];
+    let proxima = FUGAZ_PRIMERA;
+    const rr = (lo, hi) => lo + Math.random() * (hi - lo);
+
+    function nueva(start) {
+      const c = getCfg();
+      lista.push({
+        start,
+        ang: getAngulo() + rr(-1, 1) * FUGAZ_VARIACION * Math.PI / 180,
+        inv: Math.random() < FUGAZ_INVERSA,
+        off: rr(-1, 1) * FUGAZ_DIST,
+        vel: c.FUGAZ_VEL * rr(0.8, 1.25),
+        cola: c.FUGAZ_COLA * rr(0.7, 1.3),
+      });
     }
-    const l = clamp(0.5 + 0.9 * heat, 0, 1.25) * CFG.BRILLO;
-    return `rgb(${Math.min(255, c[0] * l) | 0},${Math.min(255, c[1] * l) | 0},${Math.min(255, c[2] * l) | 0})`;
-  }
 
-
-  // estrellas fugaces al azar: momento, lado, distancia, ángulo, velocidad y largo cambian cada vez
-  const fugaList = [];
-  let fugaProxima = FUGAZ_PRIMERA;
-  let desv = 0;                          // corrimiento de la galaxia hacia la izquierda cuando el panel está abierto
-  let fase = 0;                          // ángulo de giro acumulado (así cambiar SPIN no da saltos)
-  const rr = (lo, hi) => lo + Math.random() * (hi - lo);
-
-  function nuevaFugaz(start) {
-    fugaList.push({
-      start,
-      ang: CFG.TILT_DEG * Math.PI / 180 + rr(-1, 1) * FUGAZ_VARIACION * Math.PI / 180,
-      inv: Math.random() < FUGAZ_INVERSA,
-      off: rr(-1, 1) * FUGAZ_DIST,
-      vel: CFG.FUGAZ_VEL * rr(0.8, 1.25),
-      cola: CFG.FUGAZ_COLA * rr(0.7, 1.3),
-    });
-  }
-
-  function fugaces(t) {
-    if (still.matches) return;
-    const mn = Math.min(CFG.FUGAZ_MIN, CFG.FUGAZ_MAX), mx = Math.max(CFG.FUGAZ_MIN, CFG.FUGAZ_MAX);
-    if (fugaProxima - t > mx) fugaProxima = t + rr(mn, mx);   // si bajas la espera, se aplica enseguida
-    if (t >= fugaProxima) {
-      nuevaFugaz(t);
-      if (Math.random() < CFG.FUGAZ_DOBLE) nuevaFugaz(t + rr(0.3, 1.2));
-      fugaProxima = t + rr(mn, mx);
-    }
-    const aspect = W / H;
-    const [fr, fg, fb] = FUGAZ_RGB;
-    ctx.lineWidth = CFG.FUGAZ_GROSOR; ctx.lineCap = "round";
-    for (let n = fugaList.length - 1; n >= 0; n--) {
-      const e = fugaList[n];
-      if (t < e.start) continue;
-      const ca = Math.cos(e.ang), sa = Math.sin(e.ang), nx = -sa, ny = ca;
-      const sMax = (aspect / 2 + 0.2) / Math.abs(ca), dir = e.inv ? -1 : 1;
-      const head = -dir * sMax + dir * e.vel * (t - e.start);
-      const tail = head - dir * e.cola;
-      if (dir * tail > sMax) { fugaList.splice(n, 1); continue; }   // ya salió de la pantalla
-      const P = s => [((ca * s + nx * e.off) / aspect + 0.5) * W, ((sa * s + ny * e.off) + 0.5) * H];
-      const [hx, hy] = P(head), [tx, ty] = P(tail);
-      const g = ctx.createLinearGradient(tx, ty, hx, hy);
-      g.addColorStop(0, `rgba(${fr},${fg},${fb},0)`);
-      g.addColorStop(0.75, `rgba(${fr},${fg},${fb},0.5)`);
-      g.addColorStop(1, "rgba(255,255,255,0.95)");
-      ctx.strokeStyle = g;
-      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.9)";      // punto brillante en la cabeza
-      ctx.beginPath(); ctx.arc(hx, hy, CFG.FUGAZ_GROSOR * 0.8, 0, Math.PI * 2); ctx.fill();
-    }
-  }
-
-  function draw(t) {
-    ctx.fillStyle = FONDO;
-    ctx.fillRect(0, 0, W, H);
-    const aspect = W / H;
-    const intro = smooth(t / 3);        // la galaxia se enciende al abrir
-    const { ZOOM, FLAT, NEBULOSA, STAR_DENSITY, PUNTOS_DENSIDAD } = CFG;
-    const rad = CFG.TILT_DEG * Math.PI / 180, COS = Math.cos(rad), SIN = Math.sin(rad);
-
-    for (let row = 0; row < rows; row++) {
-      for (let c = 0; c < cols; c++) {
-        const i = row * cols + c;
-        const X = ((c + 0.5) / cols - 0.5) * aspect + desv;
-        const Y = (row + 0.5) / rows - 0.5;
-
-        // plano de la galaxia: rotar, aplastar, pasar a radio/ángulo
-        const u = (X * COS + Y * SIN) / ZOOM, v = (-X * SIN + Y * COS) / FLAT / ZOOM;
-        const rho = Math.hypot(u, v), phi = Math.atan2(v, u);
-
-        // los brazos giran más rápido cerca del centro
-        const a = phi - Math.log(rho / 0.04 + 1) * 1.9 + fase;
-        const arm = 0.5 + 0.5 * Math.cos(2 * a);
-        const dustA = 0.5 + 0.5 * Math.cos(2 * a + 1.1);
-
-        const core = Math.exp(-rho / 0.045) * 1.5;
-        const bulge = Math.exp(-((rho / 0.13) ** 2)) * 0.8;
-        const edge = smooth((0.45 - rho) / 0.15);
-        const clump = 0.75 + 0.25 * Math.sin(37 * a + 21 * rho + 0.4 * t) * Math.sin(13 * phi - 9 * rho);
-        let disk = Math.exp(-rho / 0.28) * (0.15 + 0.85 * arm ** 2.2) * edge * clump * 1.8;
-        const dust = (dustA ** 3) * smooth((rho - 0.08) / 0.1) * smooth((0.4 - rho) / 0.2);
-        disk *= 1 - 0.55 * dust;
-
-        // nebulosa: manchas suaves de color, muy tenues
-        const nf = Math.sin(2.3 * X + 1.4 * Math.sin(3.1 * Y + 1.0) + 0.03 * t) * Math.sin(1.9 * Y - 1.2 * X + 2.0);
-        const neb = NEBULOSA * smooth((nf - 0.1) / 0.6);
-
-        const heat = clamp((core + bulge + disk) * intro * 1.3, 0, 1.25);
-        let ch = null, col = null;
-
-        if (heat > 0.06) {
-          const idx = clamp(Math.floor(heat * 9.5), 1, RAMP.length - 1);
-          ch = RAMP[idx];
-          col = tone(rho, heat);
-        } else {
-          const n = rnd[i];
-          if (n < STAR_DENSITY) {
-            const bright = n < 0.0015 ? 2 : n < 0.006 ? 1 : 0;
-            ch = bright === 2 ? "*" : bright === 1 ? "+" : ".";
-            const tw = 0.7 + 0.3 * Math.sin(0.9 * t + n * 9000);
-            const l = (bright ? 1 : 0.7) * tw;
-            col = `rgb(${(STAR_RGB[0] * l) | 0},${(STAR_RGB[1] * l) | 0},${(STAR_RGB[2] * l) | 0})`;
-          } else if (rnd2[i] < PUNTOS_DENSIDAD) {
-            // punto de color suelto (estrella azul, naranja, rosa...)
-            const q = rnd2[i] / PUNTOS_DENSIDAD, rgb = PUNTOS_RGB[Math.floor(n * 7919) % PUNTOS_RGB.length];
-            ch = q < 0.15 ? "*" : q < 0.45 ? "+" : ".";
-            const l = 0.75 + 0.25 * Math.sin(0.7 * t + n * 5000);
-            col = `rgb(${(rgb[0] * l) | 0},${(rgb[1] * l) | 0},${(rgb[2] * l) | 0})`;
-          } else if (neb > 0 && rnd2[i] < neb * 0.5) {
-            const m = 0.5 + 0.5 * Math.sin(1.7 * X - 2.1 * Y), l = 0.4 + 0.5 * neb;
-            ch = rnd2[i] < neb * 0.12 ? ":" : ".";
-            col = `rgb(${(mix(NEB_RGB[0][0], NEB_RGB[1][0], m) * l) | 0},${(mix(NEB_RGB[0][1], NEB_RGB[1][1], m) * l) | 0},${(mix(NEB_RGB[0][2], NEB_RGB[1][2], m) * l) | 0})`;
-          }
+    return {
+      reiniciar() { lista.length = 0; proxima = FUGAZ_PRIMERA; },
+      dibujar(t) {
+        if (still.matches) return;
+        const c = getCfg();
+        const mn = Math.min(c.FUGAZ_MIN, c.FUGAZ_MAX), mx = Math.max(c.FUGAZ_MIN, c.FUGAZ_MAX);
+        if (proxima - t > mx) proxima = t + rr(mn, mx);   // si bajas la espera, se aplica enseguida
+        if (t >= proxima) {
+          nueva(t);
+          if (Math.random() < c.FUGAZ_DOBLE) nueva(t + rr(0.3, 1.2));
+          proxima = t + rr(mn, mx);
         }
-        if (ch === null || ch === " ") continue;
-        ctx.fillStyle = col;
-        ctx.fillText(ch, c * CW + CW / 2, row * CH + CH / 2);
-      }
-    }
-    fugaces(t);
+        const aspect = W / H, [fr, fg, fb] = hex(c.FUGAZ_COLOR);
+        ctx.lineWidth = c.FUGAZ_GROSOR; ctx.lineCap = "round";
+        for (let n = lista.length - 1; n >= 0; n--) {
+          const e = lista[n];
+          if (t < e.start) continue;
+          const ca = Math.cos(e.ang), sa = Math.sin(e.ang), nx = -sa, ny = ca;
+          const sMax = (aspect / 2 + 0.2) / Math.abs(ca), dir = e.inv ? -1 : 1;
+          const head = -dir * sMax + dir * e.vel * (t - e.start);
+          const tail = head - dir * e.cola;
+          if (dir * tail > sMax) { lista.splice(n, 1); continue; }   // ya salió de la pantalla
+          const P = s => [((ca * s + nx * e.off) / aspect + 0.5) * W, ((sa * s + ny * e.off) + 0.5) * H];
+          const [hx, hy] = P(head), [tx, ty] = P(tail);
+          const g = ctx.createLinearGradient(tx, ty, hx, hy);
+          g.addColorStop(0, `rgba(${fr},${fg},${fb},0)`);
+          g.addColorStop(0.75, `rgba(${fr},${fg},${fb},0.5)`);
+          g.addColorStop(1, "rgba(255,255,255,0.95)");
+          ctx.strokeStyle = g;
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
+          ctx.fillStyle = "rgba(255,255,255,0.9)";      // punto brillante en la cabeza
+          ctx.beginPath(); ctx.arc(hx, hy, c.FUGAZ_GROSOR * 0.8, 0, Math.PI * 2); ctx.fill();
+        }
+      },
+    };
   }
+  // </FUGACES>
 
+  // <UNI milky>
+  UNIVERSOS.milky = (() => {
+    const DEF = {
+      SPIN: 0.35,                       // velocidad de giro (rad/s)
+      SENTIDO: 1,                       // 1 = antihorario, -1 = horario
+      ZOOM: 1.7,                        // tamaño de la galaxia
+      TILT_DEG: -22,                    // inclinación en pantalla (grados)
+      FLAT: 0.42,                       // 1 = de frente, menor = más de canto
+      BRILLO: 1,                        // intensidad de los colores
+      COLORES: ["#fff0be", "#ff7d19", "#ff2878", "#d71e96"],   // núcleo, naranja, brazos, borde
+      NEBULOSA: 0.9,                    // manchas de color de fondo (0 = apagadas)
+      STAR_DENSITY: 0.03,               // estrellas sueltas
+      PUNTOS_DENSIDAD: 0.010,           // puntos de colores
+      FUGAZ_MIN: 3,                     // espera mínima entre fugaces (s)
+      FUGAZ_MAX: 12,                    // espera máxima (s)
+      FUGAZ_DOBLE: 0.25,                // probabilidad de doble (0 a 1)
+      FUGAZ_VEL: 1.9,                   // velocidad
+      FUGAZ_COLA: 0.11,                 // largo de la línea
+      FUGAZ_GROSOR: 1.1,                // grosor (px)
+      FUGAZ_COLOR: "#d6ebff",           // color
+    };
+    const CFG = JSON.parse(JSON.stringify(DEF));
+    const COM = {"SPIN": "velocidad de giro (rad/s)", "SENTIDO": "1 = antihorario, -1 = horario", "ZOOM": "tamaño de la galaxia", "TILT_DEG": "inclinación en pantalla (grados)", "FLAT": "1 = de frente, menor = más de canto", "BRILLO": "intensidad de los colores", "COLORES": "núcleo, naranja, brazos, borde", "NEBULOSA": "manchas de color de fondo (0 = apagadas)", "STAR_DENSITY": "estrellas sueltas", "PUNTOS_DENSIDAD": "puntos de colores", "FUGAZ_MIN": "espera mínima entre fugaces (s)", "FUGAZ_MAX": "espera máxima (s)", "FUGAZ_DOBLE": "probabilidad de doble (0 a 1)", "FUGAZ_VEL": "velocidad", "FUGAZ_COLA": "largo de la línea", "FUGAZ_GROSOR": "grosor (px)", "FUGAZ_COLOR": "color"};
+
+    const FONDO = "#02030a", ESTRELLAS = "#fff0e1";
+    const NEBULOSA_COLORES = ["#6e3cab", "#ab5a50"];   // violeta -> marrón rojizo
+    const PUNTOS_COLORES = ["#7fb2ff", "#a5ccff", "#ffb066", "#ff8fb0", "#ffe27a", "#b68cff"];
+    const COLOR_POS = [0.07, 0.17, 0.30, 0.45];       // distancia al centro de cada color del degradado
+    const STAR_RGB = hex(ESTRELLAS), PUNTOS_RGB = PUNTOS_COLORES.map(hex), NEB_RGB = NEBULOSA_COLORES.map(hex);
+    let PAL, rnd, rnd2, fase = 0;
+    const fuga = crearFugaces(() => CFG, () => CFG.TILT_DEG * Math.PI / 180);
+
+    function recolor() { PAL = CFG.COLORES.map((h, i) => [COLOR_POS[i], hex(h)]); }
+    recolor();
+
+    function tone(rho, heat) {
+      let c = PAL[PAL.length - 1][1];
+      if (rho <= PAL[0][0]) c = PAL[0][1];
+      else for (let k = 1; k < PAL.length; k++) {
+        if (rho < PAL[k][0]) {
+          const [r0, c0] = PAL[k - 1], [r1, c1] = PAL[k], f = (rho - r0) / (r1 - r0);
+          c = [mix(c0[0], c1[0], f), mix(c0[1], c1[1], f), mix(c0[2], c1[2], f)];
+          break;
+        }
+      }
+      const l = clamp(0.5 + 0.9 * heat, 0, 1.25) * CFG.BRILLO;
+      return `rgb(${Math.min(255, c[0] * l) | 0},${Math.min(255, c[1] * l) | 0},${Math.min(255, c[2] * l) | 0})`;
+    }
+
+    function resize() {
+      CW = W < 700 ? 9 : 7; CH = Math.round(CW * 11 / 7);
+      cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
+      const R = seeded(11), R2 = seeded(23);
+      rnd = new Float32Array(cols * rows); rnd2 = new Float32Array(cols * rows);
+      for (let i = 0; i < rnd.length; i++) rnd[i] = R();
+      for (let i = 0; i < rnd2.length; i++) rnd2[i] = R2();
+      ctx.font = `${Math.round(CW * 12 / 7)}px Consolas, Menlo, "DejaVu Sans Mono", monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    }
+
+    function draw(t, dt) {
+      fase += dt * CFG.SPIN * CFG.SENTIDO;
+      ctx.fillStyle = FONDO;
+      ctx.fillRect(0, 0, W, H);
+      const aspect = W / H;
+      const intro = smooth(t / 3);        // la galaxia se enciende al abrir
+      const { ZOOM, FLAT, NEBULOSA, STAR_DENSITY, PUNTOS_DENSIDAD } = CFG;
+      const rad = CFG.TILT_DEG * Math.PI / 180, COS = Math.cos(rad), SIN = Math.sin(rad);
+
+      for (let row = 0; row < rows; row++) {
+        for (let c = 0; c < cols; c++) {
+          const i = row * cols + c;
+          const X = ((c + 0.5) / cols - 0.5) * aspect + desv;
+          const Y = (row + 0.5) / rows - 0.5;
+
+          // plano de la galaxia: rotar, aplastar, pasar a radio/ángulo
+          const u = (X * COS + Y * SIN) / ZOOM, v = (-X * SIN + Y * COS) / FLAT / ZOOM;
+          const rho = Math.hypot(u, v), phi = Math.atan2(v, u);
+
+          // giro rígido: la forma nunca cambia, solo rota
+          const a = phi - Math.log(rho / 0.04 + 1) * 1.9 + fase;
+          const arm = 0.5 + 0.5 * Math.cos(2 * a);
+          const dustA = 0.5 + 0.5 * Math.cos(2 * a + 1.1);
+
+          const core = Math.exp(-rho / 0.045) * 1.5;
+          const bulge = Math.exp(-((rho / 0.13) ** 2)) * 0.8;
+          const edge = smooth((0.45 - rho) / 0.15);
+          const clump = 0.75 + 0.25 * Math.sin(37 * a + 21 * rho + 0.4 * t) * Math.sin(13 * phi - 9 * rho);
+          let disk = Math.exp(-rho / 0.28) * (0.15 + 0.85 * arm ** 2.2) * edge * clump * 1.8;
+          const dust = (dustA ** 3) * smooth((rho - 0.08) / 0.1) * smooth((0.4 - rho) / 0.2);
+          disk *= 1 - 0.55 * dust;
+
+          // nebulosa: manchas suaves de color, muy tenues
+          const nf = Math.sin(2.3 * X + 1.4 * Math.sin(3.1 * Y + 1.0) + 0.03 * t) * Math.sin(1.9 * Y - 1.2 * X + 2.0);
+          const neb = NEBULOSA * smooth((nf - 0.1) / 0.6);
+
+          const heat = clamp((core + bulge + disk) * intro * 1.3, 0, 1.25);
+          let ch = null, col = null;
+
+          if (heat > 0.06) {
+            const idx = clamp(Math.floor(heat * 9.5), 1, RAMP.length - 1);
+            ch = RAMP[idx];
+            col = tone(rho, heat);
+          } else {
+            const n = rnd[i];
+            if (n < STAR_DENSITY) {
+              const bright = n < 0.0015 ? 2 : n < 0.006 ? 1 : 0;
+              ch = bright === 2 ? "*" : bright === 1 ? "+" : ".";
+              const tw = 0.7 + 0.3 * Math.sin(0.9 * t + n * 9000);
+              const l = (bright ? 1 : 0.7) * tw;
+              col = `rgb(${(STAR_RGB[0] * l) | 0},${(STAR_RGB[1] * l) | 0},${(STAR_RGB[2] * l) | 0})`;
+            } else if (rnd2[i] < PUNTOS_DENSIDAD) {
+              // punto de color suelto (estrella azul, naranja, rosa...)
+              const q = rnd2[i] / PUNTOS_DENSIDAD, rgb = PUNTOS_RGB[Math.floor(n * 7919) % PUNTOS_RGB.length];
+              ch = q < 0.15 ? "*" : q < 0.45 ? "+" : ".";
+              const l = 0.75 + 0.25 * Math.sin(0.7 * t + n * 5000);
+              col = `rgb(${(rgb[0] * l) | 0},${(rgb[1] * l) | 0},${(rgb[2] * l) | 0})`;
+            } else if (neb > 0 && rnd2[i] < neb * 0.5) {
+              const m = 0.5 + 0.5 * Math.sin(1.7 * X - 2.1 * Y), l = 0.4 + 0.5 * neb;
+              ch = rnd2[i] < neb * 0.12 ? ":" : ".";
+              col = `rgb(${(mix(NEB_RGB[0][0], NEB_RGB[1][0], m) * l) | 0},${(mix(NEB_RGB[0][1], NEB_RGB[1][1], m) * l) | 0},${(mix(NEB_RGB[0][2], NEB_RGB[1][2], m) * l) | 0})`;
+            }
+          }
+          if (ch === null || ch === " ") continue;
+          ctx.fillStyle = col;
+          ctx.fillText(ch, c * CW + CW / 2, row * CH + CH / 2);
+        }
+      }
+      fuga.dibujar(t);
+    }
+
+    return {
+      nombre: "Milky Way", archivo: "milkyway.js", fondo: FONDO, glow: false,
+      DEF, CFG, COM, recolor,
+      grupos: [
+        ["Galaxia", [
+          ["SPIN", "Giro", 0, 1.5, 0.01, 1, ""],
+          ["ZOOM", "Zoom", 0.8, 3, 0.05, 1, ""],
+          ["TILT_DEG", "Inclinación", -90, 90, 1, 1, "°"],
+          ["FLAT", "Aplastamiento", 0.2, 1, 0.01, 1, ""],
+        ], { sentido: [["Antihorario", 1], ["Horario", -1]] }],
+        ["Colores", [
+          ["BRILLO", "Brillo", 0.5, 1.5, 0.05, 1, ""],
+        ], { colores: [["Núcleo", "COLORES", 0], ["Naranja", "COLORES", 1], ["Brazos", "COLORES", 2], ["Borde", "COLORES", 3], ["Fugaz", "FUGAZ_COLOR"]] }],
+        ["Fondo", [
+          ["NEBULOSA", "Nebulosa", 0, 2, 0.1, 1, ""],
+          ["STAR_DENSITY", "Estrellas", 0, 0.08, 0.005, 100, "%"],
+          ["PUNTOS_DENSIDAD", "Puntos de color", 0, 0.03, 0.001, 100, "%"],
+        ]],
+        ["Estrellas fugaces", FILAS_FUGACES],
+      ],
+      arrancar() { fase = 0; fuga.reiniciar(); },
+      resize, draw,
+      quieto() { fase = 6 * CFG.SPIN * CFG.SENTIDO; draw(6, 0); },
+    };
+  })();
+  // </UNI milky>
+
+  // <UNI webb>
+  UNIVERSOS.webb = (() => {
+    const DEF = {
+      SPIN: 0.12,                       // velocidad de giro (rad/s)
+      SENTIDO: 1,                       // 1 = horario, -1 = antihorario
+      ZOOM: 1.05,                       // tamaño de la galaxia
+      TILT_DEG: 0,                      // inclinación en pantalla (grados)
+      FLAT: 1,                          // 1 = de frente, menor = más de canto
+      BRILLO: 1,                        // brillo general
+      SATURACION: 1.15,                 // 1 = color de la foto, mayor = más vivo
+      GANANCIA: 1.9,                    // cuánta luz se convierte en caracteres densos
+      GAMMA: 1.2,                       // menor = más caracteres en zonas oscuras
+      UMBRAL: 0.07,                     // por debajo de esto no se dibuja nada
+      TINTE: "#ffffff",                 // tiñe toda la imagen (blanco = sin cambio)
+      ESTRELLAS: "#fff0e1",             // color de las estrellas sueltas
+      STAR_DENSITY: 0.02,               // estrellas sueltas
+      FUGAZ_MIN: 3,                     // espera mínima entre fugaces (s)
+      FUGAZ_MAX: 12,                    // espera máxima (s)
+      FUGAZ_DOBLE: 0.25,                // probabilidad de doble (0 a 1)
+      FUGAZ_VEL: 1.9,                   // velocidad
+      FUGAZ_COLA: 0.11,                 // largo de la línea
+      FUGAZ_GROSOR: 1.1,                // grosor (px)
+      FUGAZ_COLOR: "#d6ebff",           // color
+      FUGAZ_ANG: -22,                   // ángulo de las fugaces (grados)
+    };
+    const CFG = JSON.parse(JSON.stringify(DEF));
+    const COM = {"SPIN": "velocidad de giro (rad/s)", "SENTIDO": "1 = horario, -1 = antihorario", "ZOOM": "tamaño de la galaxia", "TILT_DEG": "inclinación en pantalla (grados)", "FLAT": "1 = de frente, menor = más de canto", "BRILLO": "brillo general", "SATURACION": "1 = color de la foto, mayor = más vivo", "GANANCIA": "cuánta luz se convierte en caracteres densos", "GAMMA": "menor = más caracteres en zonas oscuras", "UMBRAL": "por debajo de esto no se dibuja nada", "TINTE": "tiñe toda la imagen (blanco = sin cambio)", "ESTRELLAS": "color de las estrellas sueltas", "STAR_DENSITY": "estrellas sueltas", "FUGAZ_MIN": "espera mínima entre fugaces (s)", "FUGAZ_MAX": "espera máxima (s)", "FUGAZ_DOBLE": "probabilidad de doble (0 a 1)", "FUGAZ_VEL": "velocidad", "FUGAZ_COLA": "largo de la línea", "FUGAZ_GROSOR": "grosor (px)", "FUGAZ_COLOR": "color", "FUGAZ_ANG": "ángulo de las fugaces (grados)"};
+
+    const FONDO = "#030104";
+    const TEX = "data:image/jpeg;base64,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";
+    const SUB = [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]];   // 4 sub-muestras por celda
+    let tex = null, TS = 0, cargando = false, rnd, fase = 0;
+    const px = [0, 0, 0];
+    const fuga = crearFugaces(() => CFG, () => CFG.FUGAZ_ANG * Math.PI / 180);
+
+    // muestreo bilineal de la foto; (s,t) en 0..1. Devuelve r,g,b (0..1) en 'px'
+    function sample(s, t) {
+      if (s < 0 || t < 0 || s >= 1 || t >= 1) { px[0] = px[1] = px[2] = 0; return; }
+      const x = s * (TS - 1), y = t * (TS - 1);
+      const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0;
+      const i00 = (y0 * TS + x0) * 4, i10 = i00 + 4, i01 = i00 + TS * 4, i11 = i01 + 4;
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+      for (let k = 0; k < 3; k++)
+        px[k] = (tex[i00 + k] * w00 + tex[i10 + k] * w10 + tex[i01 + k] * w01 + tex[i11 + k] * w11) / 255;
+    }
+
+    function cargar() {
+      if (tex || cargando) return;
+      cargando = true;
+      const img = new Image();
+      img.onload = () => {
+        TS = img.width;
+        const oc = document.createElement("canvas"); oc.width = oc.height = TS;
+        const octx = oc.getContext("2d", { willReadFrequently: true });
+        octx.drawImage(img, 0, 0);
+        tex = octx.getImageData(0, 0, TS, TS).data;
+        if (still.matches && U === UNIVERSOS.webb) UNIVERSOS.webb.quieto();
+      };
+      img.src = TEX;
+    }
+
+    function resize() {
+      CW = W < 700 ? 9 : 7; CH = Math.round(CW * 11 / 7);
+      cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
+      const R = seeded(11);
+      rnd = new Float32Array(cols * rows);
+      for (let i = 0; i < rnd.length; i++) rnd[i] = R();
+      ctx.font = `${Math.round(CW * 12 / 7)}px Consolas, Menlo, "DejaVu Sans Mono", monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    }
+
+    function draw(t, dt) {
+      fase += dt * CFG.SPIN * CFG.SENTIDO;
+      ctx.fillStyle = FONDO;
+      ctx.fillRect(0, 0, W, H);
+      if (!tex) return;                              // la foto todavía se está cargando
+      const { ZOOM, FLAT, BRILLO, SATURACION, GANANCIA, GAMMA, UMBRAL, STAR_DENSITY } = CFG;
+      const tn = hex(CFG.TINTE).map(v => v / 255), STAR_RGB = hex(CFG.ESTRELLAS);
+      const aspect = W / H;
+      const intro = smooth(t / 3);                   // la galaxia se enciende al abrir
+      const rad = CFG.TILT_DEG * Math.PI / 180, COS = Math.cos(rad), SIN = Math.sin(rad);
+      const ca = Math.cos(-fase), sa = Math.sin(-fase);
+      const dx = aspect / cols, dy = 1 / rows;
+
+      for (let row = 0; row < rows; row++) {
+        for (let c = 0; c < cols; c++) {
+          const i = row * cols + c;
+          let r = 0, g = 0, b = 0;
+
+          for (let k = 0; k < 4; k++) {
+            const X = ((c + 0.5) / cols - 0.5) * aspect + SUB[k][0] * dx + desv;
+            const Y = (row + 0.5) / rows - 0.5 + SUB[k][1] * dy;
+            // plano de la galaxia: inclinar, aplastar, girar
+            const u = (X * COS + Y * SIN) / ZOOM, v = (-X * SIN + Y * COS) / FLAT / ZOOM;
+            const ur = u * ca - v * sa, vr = u * sa + v * ca;
+            sample(ur + 0.5, vr + 0.5);
+            // viñeta circular para que al girar no se vean los bordes de la foto
+            const f = 1 - smooth((Math.hypot(u, v) - 0.40) / 0.10);
+            r += px[0] * f; g += px[1] * f; b += px[2] * f;
+          }
+          r *= 0.25 * tn[0]; g *= 0.25 * tn[1]; b *= 0.25 * tn[2];
+
+          const lum = clamp(0.299 * r + 0.587 * g + 0.114 * b, 0, 1);
+          const heat = Math.pow(clamp(lum * GANANCIA * intro, 0, 1), GAMMA);
+          let ch = null, col = null;
+
+          if (heat > UMBRAL) {
+            const idx = clamp(Math.floor(heat * (RAMP.length - 0.01)), 1, RAMP.length - 1);
+            ch = RAMP[idx];
+            // color de la foto: se normaliza para que sea vivo y se modula con la luz
+            const m = Math.max(r, g, b, 1e-4);
+            const mean = (r + g + b) / 3 / m;
+            let nr = r / m, ng = g / m, nb = b / m;
+            nr = mean + (nr - mean) * SATURACION; ng = mean + (ng - mean) * SATURACION; nb = mean + (nb - mean) * SATURACION;
+            const l = (0.35 + 0.8 * heat) * BRILLO * 255;
+            col = `rgb(${clamp(nr * l, 0, 255) | 0},${clamp(ng * l, 0, 255) | 0},${clamp(nb * l, 0, 255) | 0})`;
+          } else {
+            const n = rnd[i];
+            if (n < STAR_DENSITY) {
+              const bright = n < 0.0015 ? 2 : n < 0.006 ? 1 : 0;
+              ch = bright === 2 ? "*" : bright === 1 ? "+" : ".";
+              const tw = 0.7 + 0.3 * Math.sin(0.9 * t + n * 9000);
+              const l = (bright ? 1 : 0.7) * tw;
+              col = `rgb(${(STAR_RGB[0] * l) | 0},${(STAR_RGB[1] * l) | 0},${(STAR_RGB[2] * l) | 0})`;
+            }
+          }
+          if (ch === null || ch === " ") continue;
+          ctx.fillStyle = col;
+          ctx.fillText(ch, c * CW + CW / 2, row * CH + CH / 2);
+        }
+      }
+      fuga.dibujar(t);
+    }
+
+    return {
+      nombre: "Galaxy Webb", archivo: "galaxywebb.js", fondo: FONDO, glow: false,
+      DEF, CFG, COM,
+      grupos: [
+        ["Galaxia", [
+          ["SPIN", "Giro", 0, 1, 0.01, 1, ""],
+          ["ZOOM", "Zoom", 0.7, 2.5, 0.05, 1, ""],
+          ["TILT_DEG", "Inclinación", -90, 90, 1, 1, "°"],
+          ["FLAT", "Aplastamiento", 0.2, 1, 0.01, 1, ""],
+        ], { sentido: [["Horario", 1], ["Antihorario", -1]] }],
+        ["Imagen", [
+          ["BRILLO", "Brillo", 0.5, 1.5, 0.05, 1, ""],
+          ["SATURACION", "Saturación", 0, 2.5, 0.05, 1, ""],
+          ["GANANCIA", "Luz", 0.8, 3.5, 0.05, 1, ""],
+          ["GAMMA", "Contraste", 0.6, 2.2, 0.05, 1, ""],
+        ], { colores: [["Tinte", "TINTE"], ["Estrellas", "ESTRELLAS"], ["Fugaz", "FUGAZ_COLOR"]] }],
+        ["Fondo", [
+          ["STAR_DENSITY", "Estrellas", 0, 0.08, 0.005, 100, "%"],
+        ]],
+        ["Estrellas fugaces", [...FILAS_FUGACES, ["FUGAZ_ANG", "Ángulo", -90, 90, 1, 1, "°"]]],
+      ],
+      arrancar() { fase = 0; fuga.reiniciar(); cargar(); },
+      resize, draw,
+      quieto() { fase = 6 * CFG.SPIN * CFG.SENTIDO; draw(6, 0); },
+    };
+  })();
+  // </UNI webb>
+
+  // <UNI bh>
+  UNIVERSOS.bh = (() => {
+    const DEF = {
+      GIRO: 1,                          // velocidad de giro del gas (1 = normal)
+      PULSE_EVERY: 10,                  // cada cuántos segundos se encoge y hace el destello (0 = sin pulsos)
+      SHRINK: 0.08,                     // cuánto se encoge antes del destello
+      OFFSET_X: 0,                      // desplaza el agujero: -0.25 = izquierda, 0.25 = derecha
+      TAM: 1,                           // tamaño del agujero negro
+      BRILLO: 1,                        // brillo general
+      C_ROJO: "#f24e14",                // color del gas más frío
+      C_NARANJA: "#ff7c22",             // color del gas medio
+      C_AMBAR: "#ffac4e",               // color del gas caliente
+      C_NUCLEO: "#ffdea8",              // color de lo más brillante
+      C_ESTRELLAS: "#dce4ff",           // color de las estrellas
+    };
+    const CFG = JSON.parse(JSON.stringify(DEF));
+    const COM = {"GIRO": "velocidad de giro del gas (1 = normal)", "PULSE_EVERY": "cada cuántos segundos se encoge y hace el destello (0 = sin pulsos)", "SHRINK": "cuánto se encoge antes del destello", "OFFSET_X": "desplaza el agujero: -0.25 = izquierda, 0.25 = derecha", "TAM": "tamaño del agujero negro", "BRILLO": "brillo general", "C_ROJO": "color del gas más frío", "C_NARANJA": "color del gas medio", "C_AMBAR": "color del gas caliente", "C_NUCLEO": "color de lo más brillante", "C_ESTRELLAS": "color de las estrellas"};
+
+    // ---------- CONSTANTES (de black_hole.py) ----------
+    const R0 = 0.11, TILT = 17 * Math.PI / 180, INC = 0.12;
+    const R_IN = 1.55 * R0, R_OUT = 5.4 * R0, FLASH = 7.800222;
+    const POOLS = ["1il!;:", "rtfjcvxz=+", "aeoun0{}[]<>", "08B$#&%Q"];
+    const STATIC_T = 9.5;             // frame fijo si el usuario pide menos movimiento
+    const DEEP = 0, RED = 1, ORANGE = 2, AMBER = 3, HOT = 4, STAR = 5, DUST = 6;
+    const COS_T = Math.cos(TILT), SIN_T = Math.sin(TILT);
+    let TAG, rnd, hsh, wAcc = 0, limpiar = true;
+
+    function recolor() {
+      const rojo = hex(CFG.C_ROJO);
+      TAG = [[rojo[0] * 0.785, rojo[1] * 0.49, rojo[2] * 0.6], rojo, hex(CFG.C_NARANJA), hex(CFG.C_AMBAR), hex(CFG.C_NUCLEO), hex(CFG.C_ESTRELLAS), [130, 72, 48]];
+    }
+    recolor();
+
+    // ---------- matemática ----------
+    const spin = t => {
+      const s = Math.max(t - FLASH, 0);
+      return 0.060222 * t + 0.28 * (s - 0.8 * (1 - Math.exp(-s / 0.8)));
+    };
+    const ripple = (a, b, t) =>
+      Math.sin(a + 0.900222 * Math.sin(b + 1.3 * t)) * 0.5 +
+      Math.sin(2.3 * a - b + 0.7 * t) * 0.3 +
+      Math.sin(4.1 * a + 1.7 * b - 1.1 * t) * 0.2;
+
+    const PULSES = [[1.8, 0.0, 0.95], [2.4, 2.1, 0.8], [3.2, 4.2, 0.65]];
+    let gPhase = 0, gLr = 0, gPulse = 0;           // salidas extra de gas()
+
+    // anillos finos de gas en órbitas circulares; los internos giran más rápido
+    function gas(phi, rho, t, w) {
+      rho = Math.max(rho, 1e-6);
+      const phase = phi - Math.pow(rho / R_IN, -1.5) * w;
+      const lr = Math.log(rho / R0);
+      const a = 46 * lr + 0.9 * Math.sin(phase + 3 * lr);
+      let streak = 0.55 + 0.3 * Math.sin(a) + 0.15 * Math.sin(2.3 * a + 2 * phase)
+        + 0.12 * Math.sin(3 * phase - 7 * lr + 0.3 * t);
+      if (gPulse > 0) {                 // cometas de luz que viajan por las órbitas
+        let pulses = 0;
+        for (const [ringR, start, speed] of PULSES) {
+          const d = mod(phi - start - speed * t + Math.PI, TAU) - Math.PI;
+          const comet = d > 0 ? Math.exp(-((d / 0.18) ** 2)) : Math.exp(d / 0.9);
+          pulses += comet * Math.exp(-(((lr - Math.log(ringR)) / 0.07) ** 2));
+        }
+        streak += 0.9 * gPulse * pulses;
+      }
+      gPhase = phase; gLr = lr;
+      return streak;
+    }
+
+    // la cara trasera del disco, doblada sobre la sombra
+    function lensedHalo(r, ang, t, w) {
+      const top = 0.5 - 0.5 * Math.sin(ang - TILT);
+      const side = Math.abs(Math.cos(ang - TILT)) ** 10;
+      const o = r - 1.1 * R0;
+      const band = Math.exp(-((Math.max(o, 0) / (0.2 * R0 + 0.24 * R0 * top + 0.45 * R0 * side)) ** 2))
+        * Math.exp(-((Math.min(o, 0) / (0.2 * R0)) ** 2));
+      const rho = (1 - side) * (R_IN + Math.max(r - R0, 0) * 2.6) + side * Math.max(r, R_IN);
+      const flow = gas(ang - TILT, rho, t, w);
+      return 1.2 * band * flow * (0.5 + 0.8 * top) * (1 - 0.25 * Math.cos(ang - TILT));
+    }
+
+    function tangentLetter(dx, dy) {
+      const s = mod(Math.atan2(-dy, dx) * 180 / Math.PI, 180);
+      if (s < 22.5 || s >= 157.5) return "-";
+      if (s < 67.5) return "/";
+      if (s < 112.5) return "|";
+      return "\\";
+    }
+
+    function resize() {
+      CW = W < 700 ? 10 : 7; CH = Math.round(CW * 11 / 7);   // celdas más grandes en celular
+      gl.width = Math.round(W / 4); gl.height = Math.round(H / 4);
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+      cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
+      const R = seeded(7);
+      rnd = new Float32Array(cols * rows); hsh = new Uint8Array(cols * rows);
+      for (let i = 0; i < rnd.length; i++) { rnd[i] = R(); hsh[i] = (R() * 12) | 0; }
+      ctx.font = `${Math.round(CW * 12 / 7)}px Consolas, Menlo, "DejaVu Sans Mono", monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      limpiar = true;
+    }
+
+    function draw(t, dt) {
+      // el giro se acumula, así cambiar la velocidad no da saltos
+      wAcc += (0.060222 + (t > FLASH ? 0.28 * (1 - Math.exp(-(t - FLASH) / 0.8)) : 0)) * dt * CFG.GIRO;
+      const trail = !limpiar; limpiar = false;
+      const ts = t, open = 1;           // la intro corre una sola vez
+      // estela: el frame anterior conserva ~40%; el nuevo se pega con "lighten" (equivale a MAX)
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = trail ? "rgba(0,0,0,0.6)" : "#000";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighten";
+
+      const PE = CFG.PULSE_EVERY >= 2 ? CFG.PULSE_EVERY : 0, SHRINK = CFG.SHRINK, OFFSET_X = CFG.OFFSET_X, bri = CFG.BRILLO;
+      const aspect = W / H;
+      const w = wAcc;
+      const cam = smooth(smooth((ts - FLASH + 0.3) / 2.6)) * open;
+      // pulso periódico: poco antes del destello se encoge un poquito, destella y vuelve a su tamaño
+      const u0 = t - FLASH;
+      let shrink = 0, extra = 0, since = u0;
+      if (PE && u0 > PE - 0.9) {
+        const q = u0 % PE, n = Math.floor(u0 / PE);
+        const pre = smooth((q - (PE - 0.9)) / 0.9);       // se encoge en los 0.9 s previos
+        const post = n >= 1 ? 1 - smooth(q / 1.2) : 0;     // y se recupera en 1.2 s
+        shrink = Math.max(pre, post);
+        since = q;
+        if (n >= 1 || q > PE / 2) {
+          const sd = q > PE / 2 ? q - PE : q;
+          extra = Math.exp(-((sd / 0.22) ** 2));
+        }
+      }
+      const zoom = (1 + 0.28 * cam) * (1 - SHRINK * shrink) * CFG.TAM, inc = INC + 0.09 * cam;
+      const flash = Math.max(Math.exp(-(((ts - FLASH) / 0.22) ** 2)), extra);
+      const ringK = smooth((ts - 0.3) / 2.2);
+      const diskOn = smooth((ts - 5.0) / 2.8) * open;
+      const auraK = smooth((ts - 2.2) / 1.8) * (1 - 0.65 * diskOn);
+      const span = R0 + diskOn * (R_OUT * 1.1 - R0);
+      const diskGate = smooth((ts - 5.0) / 0.8) * (0.55 + 0.45 * smooth((ts - FLASH + 0.3) / 0.4)) * open;
+      const haloGate = smooth((ts - 5.0) / 2.2) * open;
+      const ringGate = 0.9 + 0.3 * smooth((ts - 5) / 2);
+      const front = R0 + since * 0.55;
+      const shockFade = since > 0 ? Math.exp(-since / 0.5) * 0.9 : 0;
+      gPulse = ts > FLASH ? smooth((ts - FLASH) / 1.0) * open : 0;
+
+      for (let row = 0; row < rows; row++) {
+        for (let c = 0; c < cols; c++) {
+          const i = row * cols + c;
+          const X0 = ((c + 0.5) / cols - 0.5 - OFFSET_X) * aspect + desv;
+          const Y0 = (row + 0.5) / rows - 0.5;
+          const X = X0 / zoom, Y = (Y0 + 0.02 * cam) / zoom;
+          const r = Math.hypot(X, Y), ang = Math.atan2(Y, X);
+
+          // 1. anillo que se dibuja solo
+          const around = mod(ang + Math.PI / 2, TAU) / TAU;
+          const ring = Math.exp(-(((r - 1.02 * R0) / (0.045 * R0)) ** 2)) * smooth((ringK * 1.08 - around) / 0.08);
+
+          // 2. aura que respira y se funde con los anillos del disco
+          const rings = gas(ang - TILT, R_IN + Math.max(r - R0, 0) * 2.6, t, w);
+          let puff = 0.5 + 0.5 * ripple(2 * ang, 5 * r - 0.45 * t, 0.35 * t);
+          puff = puff * (1 - diskOn) + rings * diskOn;
+          const reach = 0.32 * R0 * (0.7 + 0.6 * puff);
+          const aura = auraK * Math.exp(-((Math.max(r - R0, 0) / reach) ** 1.6)) * (0.6 + 0.4 * puff);
+
+          // 3. disco inclinado: se rota, se aplasta por INC y se pasa a radio/ángulo
+          const u = X * COS_T + Y * SIN_T, v = -X * SIN_T + Y * COS_T;
+          const rho = Math.hypot(u, v / inc), phi = Math.atan2(v / inc, u);
+          const streak = gas(phi, rho, t, w);
+          const phase = gPhase, lr = gLr;
+          const edge = smooth((rho - R_IN) / (0.25 * R0)) * smooth((R_OUT - rho) / (2.2 * R0));
+          let disk = 1.5 * edge * streak * (R_IN / rho);
+          disk *= 1 - 0.25 * u / Math.max(rho, 1e-6);            // Doppler: el lado que se acerca brilla más
+          disk *= diskGate * smooth((span - Math.abs(u)) / (0.6 * R0));
+
+          const halo = lensedHalo(r, ang, t, w) * haloGate;
+          const shock = ts > FLASH ? Math.exp(-(((r - front) / 0.02) ** 2)) * shockFade : 0;
+
+          // mezcla "screen" en vez de max, para que todo se funda
+          let soft = 1 - (1 - clamp(aura * 0.55, 0, 1)) * (1 - clamp(halo, 0, 1)) * (1 - clamp(disk, 0, 1));
+          soft = Math.max(soft, disk, halo);
+          let heat = Math.max(ring * ringGate, soft, shock) * (1 + 1.4 * flash);
+
+          const inside = r < R0 * 0.97;
+          if (inside) heat = v > 0 ? (disk > 0.2 ? disk : 0) : 0;   // la sombra tapa lo de atrás
+
+          let ch = null, tag = DEEP, lum = 0;
+          if (heat > 0.07) {
+            const level = clamp(Math.floor(heat * 3.6), 0, 3);
+            const pool = POOLS[level];
+            const k = mod(hsh[i] + Math.floor(phase * 2 + lr * 6), 12) % pool.length;
+            ch = pool[k];
+            if (ring > aura * 0.8 && ring > disk && ring > halo && ring > 0.25) ch = tangentLetter(-Math.sin(ang), Math.cos(ang));
+            tag = heat < 0.1 ? DEEP : heat < 0.2 ? RED : heat < 0.45 ? ORANGE : heat < 0.75 ? AMBER : HOT;
+            lum = clamp(0.42 + 0.85 * heat, 0, 1.3) * (0.35 + 0.65 * smooth((heat - 0.07) / 0.15));
+          } else if (!inside) {
+            const n = rnd[i];
+            if (n < 0.0025) {                                        // estrellas
+              ch = n < 0.0005 ? "+" : n < 0.0012 ? "*" : ".";
+              tag = STAR; lum = 0.75 + 0.2 * Math.sin(0.8 * t + n * 9000);
+            } else if (ts > 4.0) {                                    // polvo en el plano del disco
+              const lane = Math.exp(-((((-X * SIN_T + Y * COS_T) - 0.02) / 0.09) ** 2));
+              if (n > 1 - 0.035 * lane) {
+                ch = n > 1 - 0.01 * lane ? ":" : ",";
+                tag = DUST; lum = 0.3 * smooth((ts - 4.0) / 3.0);
+              }
+            }
+          }
+          if (ch === null) continue;
+          const col = TAG[tag], l = lum * bri;
+          ctx.fillStyle = `rgb(${Math.min(255, col[0] * l) | 0},${Math.min(255, col[1] * l) | 0},${Math.min(255, col[2] * l) | 0})`;
+          ctx.fillText(ch, c * CW + CW / 2, row * CH + CH / 2);
+        }
+      }
+      ctx.globalCompositeOperation = "source-over";
+
+      // glow: copia reducida del canvas; el CSS la desenfoca y la suma encima
+      gctx.drawImage(cv, 0, 0, gl.width, gl.height);
+    }
+
+    return {
+      nombre: "Black hole", archivo: "blackhole.js", fondo: "#000", glow: true,
+      DEF, CFG, COM, recolor,
+      grupos: [
+        ["Agujero negro", [
+          ["GIRO", "Giro del gas", 0, 4, 0.05, 1, "×"],
+          ["TAM", "Tamaño", 0.5, 1.8, 0.05, 1, ""],
+          ["OFFSET_X", "Desplazamiento", -0.4, 0.4, 0.01, 1, ""],
+          ["BRILLO", "Brillo", 0.5, 1.6, 0.05, 1, ""],
+        ]],
+        ["Pulso", [
+          ["PULSE_EVERY", "Pulso cada (0 = nunca)", 0, 30, 1, 1, " s"],
+          ["SHRINK", "Encogimiento", 0, 0.3, 0.01, 1, ""],
+        ]],
+        ["Colores", [], { colores: [["Rojo", "C_ROJO"], ["Naranja", "C_NARANJA"], ["Ámbar", "C_AMBAR"], ["Núcleo", "C_NUCLEO"], ["Estrellas", "C_ESTRELLAS"]] }],
+      ],
+      arrancar() { wAcc = 0; limpiar = true; },
+      resize, draw,
+      quieto() { wAcc = spin(STATIC_T); limpiar = true; draw(STATIC_T, 0); },
+    };
+  })();
+  // </UNI bh>
 
   // <PANEL>
   // ---------- PANEL DE CONTROLES ----------
-  // [clave, etiqueta, mín, máx, paso, multiplicador para mostrar, unidad]
-  const GRUPOS = [
-    ["Galaxia", [
-      ["SPIN", "Giro", 0, 1.5, 0.01, 1, ""],
-      ["ZOOM", "Zoom", 0.8, 3, 0.05, 1, ""],
-      ["TILT_DEG", "Inclinación", -90, 90, 1, 1, "°"],
-      ["FLAT", "Aplastamiento", 0.2, 1, 0.01, 1, ""],
-    ], "sentido"],
-    ["Colores", [
-      ["BRILLO", "Brillo", 0.5, 1.5, 0.05, 1, ""],
-    ], "colores"],
-    ["Fondo", [
-      ["NEBULOSA", "Nebulosa", 0, 2, 0.1, 1, ""],
-      ["STAR_DENSITY", "Estrellas", 0, 0.08, 0.005, 100, "%"],
-      ["PUNTOS_DENSIDAD", "Puntos de color", 0, 0.03, 0.001, 100, "%"],
-    ]],
-    ["Estrellas fugaces", [
-      ["FUGAZ_MIN", "Espera mínima", 1, 20, 1, 1, " s"],
-      ["FUGAZ_MAX", "Espera máxima", 2, 30, 1, 1, " s"],
-      ["FUGAZ_DOBLE", "Probabilidad de doble", 0, 1, 0.05, 100, "%"],
-      ["FUGAZ_VEL", "Velocidad", 0.5, 4, 0.1, 1, ""],
-      ["FUGAZ_COLA", "Largo", 0.05, 0.4, 0.01, 1, ""],
-      ["FUGAZ_GROSOR", "Grosor", 0.5, 3, 0.1, 1, " px"],
-    ]],
-  ];
-  const NOMBRES_COLOR = ["Núcleo", "Naranja", "Brazos", "Borde"];
   const panel = document.getElementById("panel"), abrir = document.getElementById("abrir");
-  const redondo = v => Math.round(v * 100) / 100;
 
   function fila([k, et, mn, mx, st, mul, u]) {
     const d = document.createElement("div"); d.className = "fila";
     d.innerHTML = `<div class="top"><span>${et}</span><b></b></div><input type="range" min="${mn}" max="${mx}" step="${st}" aria-label="${et}">`;
-    const inp = d.querySelector("input"), out = d.querySelector("b");
-    inp.value = CFG[k]; out.textContent = redondo(CFG[k] * mul) + u;
-    inp.addEventListener("input", () => { CFG[k] = +inp.value; out.textContent = redondo(CFG[k] * mul) + u; });
+    const inp = d.querySelector("input"), out = d.querySelector("b"), C = U.CFG;
+    inp.value = C[k]; out.textContent = redondo(C[k] * mul) + u;
+    inp.addEventListener("input", () => { C[k] = +inp.value; out.textContent = redondo(C[k] * mul) + u; });
     return d;
   }
 
   function construirPanel() {
-    panel.innerHTML = `<div class="cab"><span>Controles</span><button id="cerrar" aria-label="Ocultar controles">›</button></div>`;
-    GRUPOS.forEach(([titulo, filas, extra]) => {
+    const claves = Object.keys(UNIVERSOS);
+    panel.innerHTML = `<div class="cab"><span>Controles</span><button id="cerrar" aria-label="Ocultar controles">›</button></div>
+      <select id="universo" aria-label="Universo">${claves.map(k => `<option value="${k}">${UNIVERSOS[k].nombre}</option>`).join("")}</select>`;
+    const sel = panel.querySelector("#universo");
+    sel.value = clave;
+    sel.onchange = () => activar(sel.value);
+
+    U.grupos.forEach(([titulo, filas, extra = {}]) => {
       const det = document.createElement("details"); det.open = true;
       det.innerHTML = `<summary>${titulo}</summary>`;
-      filas.forEach(f => det.appendChild(fila(f)));
-      if (extra === "sentido") {
-        const sg = document.createElement("div"); sg.className = "seg";
-        sg.innerHTML = `<button data-s="1">Antihorario</button><button data-s="-1">Horario</button>`;
-        const marcar = () => sg.querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.s === CFG.SENTIDO));
-        sg.addEventListener("click", e => { const b = e.target.closest("button"); if (b) { CFG.SENTIDO = +b.dataset.s; marcar(); } });
-        marcar(); det.appendChild(sg);
-      }
-      if (extra === "colores") {
+      if (extra.colores) {
         const g = document.createElement("div"); g.className = "sw";
-        g.innerHTML = NOMBRES_COLOR.map((n, i) => `<label>${n}<input type="color" data-i="${i}" value="${CFG.COLORES[i]}"></label>`).join("")
-          + `<label>Fugaz<input type="color" data-i="f" value="${CFG.FUGAZ_COLOR}"></label>`;
+        g.innerHTML = extra.colores.map(([n, k, i]) =>
+          `<label>${n}<input type="color" data-k="${k}" data-i="${i === undefined ? "" : i}" value="${i === undefined ? U.CFG[k] : U.CFG[k][i]}"></label>`).join("");
         g.addEventListener("input", e => {
-          const i = e.target.dataset.i;
-          if (i === "f") CFG.FUGAZ_COLOR = e.target.value; else CFG.COLORES[+i] = e.target.value;
-          actualizarColores();
+          const { k, i } = e.target.dataset;
+          if (i === "") U.CFG[k] = e.target.value; else U.CFG[k][+i] = e.target.value;
+          if (U.recolor) U.recolor();
         });
-        det.insertBefore(g, det.children[1]);
+        det.appendChild(g);
+      }
+      filas.forEach(f => det.appendChild(fila(f)));
+      if (extra.sentido) {
+        const sg = document.createElement("div"); sg.className = "seg";
+        sg.innerHTML = extra.sentido.map(([n, v]) => `<button data-s="${v}">${n}</button>`).join("");
+        const marcar = () => sg.querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.s === U.CFG.SENTIDO));
+        sg.addEventListener("click", e => { const b = e.target.closest("button"); if (b) { U.CFG.SENTIDO = +b.dataset.s; marcar(); } });
+        marcar(); det.appendChild(sg);
       }
       panel.appendChild(det);
     });
+
     const acc = document.createElement("div"); acc.className = "acc";
     acc.innerHTML = `<button id="reiniciar">Reiniciar</button><button id="copiar">Copiar ajustes</button>`;
     panel.appendChild(acc);
     const ex = document.createElement("div");
-    ex.innerHTML = `<button class="exp" id="exportar">Exportar script (.js)</button><p class="nota">Descarga galaxia.js con tus valores actuales y las instrucciones de uso adentro.</p>`;
+    ex.innerHTML = `<button class="exp" id="exportar">Exportar script (.js)</button><p class="nota">Descarga el script de este universo con tus valores actuales y las instrucciones de uso adentro.</p>`;
     panel.appendChild(ex);
-    panel.querySelector("#exportar").onclick = e => exportarScript(e.currentTarget);
+
     panel.querySelector("#cerrar").onclick = () => { panel.classList.add("cerrado"); abrir.hidden = false; };
-    panel.querySelector("#reiniciar").onclick = () => {
-      Object.assign(CFG, JSON.parse(JSON.stringify(DEF))); actualizarColores(); construirPanel();
+    panel.querySelector("#reiniciar").onclick = () => {   // solo este universo; los demás conservan sus cambios
+      Object.assign(U.CFG, JSON.parse(JSON.stringify(U.DEF)));
+      if (U.recolor) U.recolor();
+      construirPanel();
     };
     panel.querySelector("#copiar").onclick = e => copiarAjustes(e.currentTarget);
+    panel.querySelector("#exportar").onclick = e => exportarScript(e.currentTarget);
+  }
+  alActivar = construirPanel;
+
+  // texto con los valores actuales, con los mismos nombres que usa el archivo
+  function textoAjustes(sangria) {
+    const r = v => typeof v === "number" ? Math.round(v * 1000) / 1000 : v;
+    return Object.keys(U.CFG).map(k => {
+      const base = sangria + k + ": " + JSON.stringify(r(U.CFG[k])) + ",";
+      return U.COM[k] ? base.padEnd(sangria.length + 38) + "// " + U.COM[k] : base;
+    }).join("\n");
   }
 
-  // deja en el portapapeles los valores actuales, con los mismos nombres que usa el archivo
   function copiarAjustes(btn) {
-    const c = CFG, n = redondo;
-    const txt = [
-      `SPIN: ${n(c.SPIN * c.SENTIDO)},   // negativo = horario`,
-      `ZOOM: ${n(c.ZOOM)},`, `TILT_DEG: ${n(c.TILT_DEG)},`, `FLAT: ${n(c.FLAT)},`, `BRILLO: ${n(c.BRILLO)},`,
-      `COLORES: ${JSON.stringify(c.COLORES)},`,
-      `NEBULOSA: ${n(c.NEBULOSA)},`, `STAR_DENSITY: ${n(c.STAR_DENSITY * 1000) / 1000},`, `PUNTOS_DENSIDAD: ${n(c.PUNTOS_DENSIDAD * 1000) / 1000},`,
-      `FUGAZ_MIN: ${c.FUGAZ_MIN},`, `FUGAZ_MAX: ${c.FUGAZ_MAX},`, `FUGAZ_DOBLE: ${n(c.FUGAZ_DOBLE)},`,
-      `FUGAZ_VEL: ${n(c.FUGAZ_VEL)},`, `FUGAZ_COLA: ${n(c.FUGAZ_COLA)},`, `FUGAZ_GROSOR: ${n(c.FUGAZ_GROSOR)},`, `FUGAZ_COLOR: "${c.FUGAZ_COLOR}",`,
-    ].join("\n");
+    const txt = textoAjustes("");
     const listo = () => { const o = btn.textContent; btn.textContent = "Copiado"; setTimeout(() => btn.textContent = o, 1300); };
     const respaldo = () => {
       const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta);
@@ -363,68 +795,63 @@
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(txt).then(listo, respaldo); else respaldo();
   }
 
-  // ---- exportar: genera galaxia.js (sin panel) con los valores actuales y lo descarga ----
-  const COMENTARIOS = {
-    SPIN: "velocidad de giro (rad/s)", SENTIDO: "1 = antihorario, -1 = horario", ZOOM: "tamaño de la galaxia",
-    TILT_DEG: "inclinación en grados", FLAT: "1 = de frente, menor = más de canto", BRILLO: "intensidad de los colores",
-    COLORES: "núcleo, naranja, brazos, borde", NEBULOSA: "manchas de color de fondo (0 = apagadas)",
-    STAR_DENSITY: "estrellas sueltas", PUNTOS_DENSIDAD: "puntos de colores",
-    FUGAZ_MIN: "espera mínima entre fugaces (s)", FUGAZ_MAX: "espera máxima (s)", FUGAZ_DOBLE: "probabilidad de doble (0 a 1)",
-    FUGAZ_VEL: "velocidad", FUGAZ_COLA: "largo de la línea", FUGAZ_GROSOR: "grosor (px)", FUGAZ_COLOR: "color",
-  };
-
+  // ---- exportar: genera un .js de ESTE universo (sin panel) con los valores actuales y lo descarga ----
   function exportarScript(btn) {
     const fuente = document.getElementById("motor").textContent;
-    const r = v => typeof v === "number" ? Math.round(v * 1000) / 1000 : v;
-    const ajustes = "  // ---- AJUSTES: edita estos valores para cambiar el aspecto ----\n  const CFG = {\n" +
-      Object.keys(CFG).map(k => {
-        const base = "    " + k + ": " + JSON.stringify(r(CFG[k])) + ",";
-        return COMENTARIOS[k] ? base.padEnd(40) + "// " + COMENTARIOS[k] : base;
-      }).join("\n") + "\n  };\n";
+    const ajustes = "    // ---- AJUSTES: edita estos valores para cambiar el aspecto ----\n    const CFG = {\n" +
+      textoAjustes("      ") + "\n    };\n    const DEF = CFG;\n";
 
-    const canvasOriginal = 'const cv = document.getElementById("g"), ctx = cv.getContext("2d");\n  document.documentElement.style.background = document.body.style.background = FONDO;';
-    const canvasExport = [
-      'let cv = document.getElementById("galaxia");',
-      '  if (!cv) {                       // si no hay <canvas id="galaxia">, lo crea de fondo a pantalla completa',
-      '    cv = document.createElement("canvas"); cv.id = "galaxia";',
-      '    cv.setAttribute("aria-hidden", "true");',
-      '    Object.assign(cv.style, { position: "fixed", top: "0", left: "0", width: "100%", height: "100%", zIndex: "-1", pointerEvents: "none", display: "block" });',
-      '    document.body.prepend(cv);',
-      '  }',
-      '  const ctx = cv.getContext("2d");',
-      '  document.documentElement.style.background = FONDO;',
+    const escenario = [
+      '  const escenario = document.createElement("div");',
+      '  escenario.setAttribute("aria-hidden", "true");',
+      '  Object.assign(escenario.style, { position: "fixed", top: "0", left: "0", width: "100%", height: "100%", zIndex: "-1", pointerEvents: "none" });',
+      '  const nuevoCanvas = () => {',
+      '    const c = document.createElement("canvas");',
+      '    Object.assign(c.style, { position: "absolute", top: "0", left: "0", width: "100%", height: "100%", display: "block" });',
+      '    escenario.appendChild(c); return c;',
+      '  };',
+      '  const cv = nuevoCanvas(), ctx = cv.getContext("2d");',
+      '  const gl = nuevoCanvas(), gctx = gl.getContext("2d");',
+      '  Object.assign(gl.style, { filter: "blur(9px)", mixBlendMode: "screen", opacity: ".85" });',
+      '  const velo = document.createElement("div");',
+      '  Object.assign(velo.style, { position: "absolute", top: "0", left: "0", width: "100%", height: "100%", background: "rgba(0,0,0,.25)" });',
+      '  escenario.appendChild(velo);',
+      '  document.body.prepend(escenario);',
       '  document.body.style.setProperty("background", "transparent", "important");   // si el <body> tuviera color, taparía la galaxia',
-      '  const panel = { classList: { contains: () => true }, offsetWidth: 0 };        // (el panel no existe en el script exportado)',
     ].join("\n");
+    const stub = '  const panel = { classList: { contains: () => true }, offsetWidth: 0 };   // (en el script exportado no hay panel)';
 
     let js = fuente
-      .replace(/\n  \/\/ <PANEL>[\s\S]*?\/\/ <\/PANEL>\n/, "\n")
-      .replace(/  const DEF = \{[\s\S]*?\n  \};\n  const CFG = JSON\.parse\(JSON\.stringify\(DEF\)\);\n/, () => ajustes)
-      .replace(canvasOriginal, () => canvasExport)
-      .replace("  // Estos valores son los iniciales. Los controles del panel de la derecha los cambian en vivo.\n", "");
+      .replace(/\n  \/\/ <PANEL>[\s\S]*?\/\/ <\/PANEL>\n/, () => "\n" + stub + "\n")
+      .replace(/\n  \/\/ <ESCENARIO>[\s\S]*?\/\/ <\/ESCENARIO>\n/, () => "\n" + escenario + "\n")
+      .replace('const INICIAL = "milky";', () => 'const INICIAL = "' + clave + '";');
+    Object.keys(UNIVERSOS).forEach(k => {
+      if (k !== clave) js = js.replace(new RegExp("\\n  // <UNI " + k + ">[\\s\\S]*?// </UNI " + k + ">\\n"), () => "\n");
+    });
+    if (clave === "bh") js = js.replace(/\n  \/\/ <FUGACES>[\s\S]*?\/\/ <\/FUGACES>\n/, () => "\n");
+    js = js.replace(/    const DEF = \{[\s\S]*?\n    \};\n    const CFG = JSON\.parse\(JSON\.stringify\(DEF\)\);\n/, () => ajustes);
 
     const fecha = new Date().toLocaleDateString("es");
     const cabecera = [
       "/* =====================================================================",
-      "   GALAXIA ASCII  ·  galaxia.js  ·  exportado el " + fecha + " con tus ajustes",
+      "   " + U.nombre.toUpperCase() + " ASCII  ·  " + U.archivo + "  ·  exportado el " + fecha + " con tus ajustes",
       "",
       "   CÓMO USARLO EN TU HTML",
-      "   1. Guarda este archivo junto a tu página, por ejemplo en scripts/galaxia.js",
+      "   1. Guarda este archivo junto a tu página, por ejemplo en scripts/" + U.archivo,
       "   2. En tu HTML, justo antes de </body>, agrega esta línea (ajusta la ruta):",
       "",
-      '        <script src="scripts/galaxia.js"><\/script>',
+      '        <script src="scripts/' + U.archivo + '"><\/script>',
       "",
-      "   3. Listo. No hace falta crear un <canvas>: el script crea uno solo, fijo y a",
+      "   3. Listo. No hace falta crear ningún <canvas>: el script crea el suyo, fijo y a",
       "      pantalla completa, DETRÁS de tu contenido (z-index -1), así tus textos,",
-      "      imágenes y menús se ven encima y la galaxia no se mueve al hacer scroll.",
+      "      imágenes y menús se ven encima y el fondo no se mueve al hacer scroll.",
       "",
-      "   PARA QUE SE VEA Y NADA LA TAPE",
+      "   PARA QUE SE VEA Y NADA LO TAPE",
       "   - El script ya deja el <body> sin color de fondo. Pero si un contenedor tuyo",
       "     (header, main, section, div...) tiene background con color sólido, ese",
-      "     contenedor tapa la galaxia. Quítale el fondo o usa uno semitransparente,",
+      "     contenedor tapa el fondo. Quítale el color o usa uno semitransparente,",
       "     por ejemplo: background: rgba(0, 0, 0, 0.4);",
-      "   - Si pones un <canvas id=\"galaxia\"></canvas> propio en tu HTML, el script lo",
-      "     usa tal cual y tú controlas su posición y tamaño con tu CSS.",
+      "   - No pongas dos scripts de universos en la misma página: se pisarían.",
       "   - Si no aparece nada: abre la consola del navegador (F12). Un error 404",
       "     significa que la ruta del <script src> está mal. En GitHub Pages las rutas",
       "     deben ser relativas al repositorio y respetar mayúsculas y minúsculas.",
@@ -438,35 +865,51 @@
       '\n  }\n  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", arrancar);\n  else arrancar();\n})();\n';
 
     const url = URL.createObjectURL(new Blob([salida], { type: "text/javascript" }));
-    const a = document.createElement("a"); a.href = url; a.download = "galaxia.js";
+    const a = document.createElement("a"); a.href = url; a.download = U.archivo;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     const o = btn.textContent; btn.textContent = "Descargado"; setTimeout(() => btn.textContent = o, 1500);
   }
 
   abrir.onclick = () => { panel.classList.remove("cerrado"); abrir.hidden = true; };
-  construirPanel();
   if (innerWidth < 700) { panel.classList.add("cerrado"); abrir.hidden = false; }   // en celular empieza oculto
   // </PANEL>
 
-  // ---------- bucle ----------
-  resize();
-  const still = matchMedia("(prefers-reduced-motion: reduce)");
-  let last = 0, t = 0;
-  const dibujarQuieto = () => { fase = 6 * CFG.SPIN * CFG.SENTIDO; desv = panel.classList.contains("cerrado") ? 0 : (panel.offsetWidth / 2) / H; draw(6); };
-  addEventListener("resize", () => { resize(); if (still.matches) dibujarQuieto(); });
-  if (still.matches) dibujarQuieto();
+  // ---------- activar un universo y bucle ----------
+  function redimensionar() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    U.resize();
+  }
 
+  const desvObjetivo = () => panel.classList.contains("cerrado") ? 0 : (panel.offsetWidth / 2) / H;
+
+  function activar(k) {
+    clave = k; U = UNIVERSOS[k]; t = 0;          // la animación del universo empieza de cero; sus ajustes se conservan
+    document.documentElement.style.background = U.fondo;
+    gl.style.display = velo.style.display = U.glow ? "block" : "none";
+    ctx.globalCompositeOperation = "source-over";
+    U.arrancar();
+    redimensionar();
+    alActivar();
+    if (still.matches) { desv = desvObjetivo(); U.quieto(); }
+  }
+
+  addEventListener("resize", () => { redimensionar(); if (still.matches) { desv = desvObjetivo(); U.quieto(); } });
+
+  let last = 0;
   function loop(ms) {
     requestAnimationFrame(loop);
     if (still.matches || ms - last < 1000 / FPS) return;
-    const dt = last ? Math.min((ms - last) / 1000, 0.1) : 0;
+    const dt = last ? Math.min((ms - last) / 1000, 0.1) : 0;   // si la pestaña estuvo oculta no se saltea la intro
     last = ms; t += dt;
-    fase += dt * CFG.SPIN * CFG.SENTIDO;
-    const objetivo = panel.classList.contains("cerrado") ? 0 : (panel.offsetWidth / 2) / H;
-    desv += (objetivo - desv) * 0.15;         // se desliza suave al abrir o cerrar el panel
-    draw(t);
+    desv += (desvObjetivo() - desv) * 0.15;                    // se desliza suave al abrir o cerrar el panel
+    U.draw(t, dt);
   }
+
+  activar(INICIAL);
   requestAnimationFrame(loop);
 })();
 </script>
